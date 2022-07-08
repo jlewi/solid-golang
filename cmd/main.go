@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-logr/logr"
@@ -38,9 +39,14 @@ func newRootCmd() *cobra.Command {
 	return rootCmd
 }
 
+type OAuthClientInfo struct {
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+}
+
 func newGetCmd() *cobra.Command {
 	var port int
-
+	var clientFile string
 	cmd := &cobra.Command{
 		Short: "get contents of a pod",
 		Use:   "get",
@@ -52,8 +58,8 @@ func newGetCmd() *cobra.Command {
 					return errors.Wrapf(err, "Failed to listen on port %v", port)
 				}
 
-				//webId := "https://pod.inrupt.com/jeremylewi/profile/card#me"
-				log.Info("fetching credentials", "webId")
+				webId := "https://pod.inrupt.com/jeremylewi/profile/card#me"
+				log.Info("fetching credentials", "webId", webId)
 				// TODO need to discover the oidc provider by reading the WebId profile.
 				// https://solid.github.io/solid-oidc/#oidc-issuer-discovery
 				oidcProviderUri := "https://broker.pod.inrupt.com/"
@@ -78,6 +84,25 @@ func newGetCmd() *cobra.Command {
 					// N.B. keep this in sync with the client id document
 					RedirectURL: "http://localhost:9080/auth/callback",
 					Scopes:      []string{oidc.ScopeOpenID},
+				}
+
+				if clientFile != "" {
+					log.Info("Loading client id and secret", "file", clientFile)
+
+					b, err := ioutil.ReadFile(clientFile)
+					if err != nil {
+						return errors.Wrapf(err, "Failed to read file: %v", clientFile)
+					}
+
+					info := &OAuthClientInfo{}
+					err = json.Unmarshal(b, info)
+					if err != nil {
+						return errors.Wrapf(err, "Failed to unmarshal client file to OAuthClientInfo")
+					}
+					config.ClientID = info.ClientID
+					config.ClientSecret = info.ClientSecret
+					// I'm getting invalid redirect_uri this was an attempt to fix this.
+					config.RedirectURL = fmt.Sprintf("http://127.0.0.1:%v", port)
 				}
 
 				s, err := server.NewServer(config, verifier, listener, log)
@@ -111,6 +136,7 @@ func newGetCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().IntVarP(&port, "port", "p", 9080, "Port to serve on")
+	cmd.Flags().StringVarP(&clientFile, "client-path", "", "", "If supplied should be a JSON file containing client id and secret")
 
 	return cmd
 }
