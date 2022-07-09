@@ -71,7 +71,7 @@ func newGetCmd() *cobra.Command {
 				}
 
 				// We host the Client ID document using github.
-				clientID := "https://raw.githubusercontent.com/jlewi/solid-golang/main/id/clientid"
+				clientID := "https://raw.githubusercontent.com/jlewi/solid-golang/main/id/clientid20220708-1510#this"
 				oidcConfig := &oidc.Config{
 					ClientID: clientID,
 				}
@@ -83,7 +83,7 @@ func newGetCmd() *cobra.Command {
 					Endpoint: provider.Endpoint(),
 					// N.B. keep this in sync with the client id document
 					RedirectURL: "http://localhost:9080/auth/callback",
-					Scopes:      []string{oidc.ScopeOpenID},
+					Scopes:      []string{oidc.ScopeOpenID, oidc.ScopeOfflineAccess},
 				}
 
 				if clientFile != "" {
@@ -144,5 +144,6 @@ func newGetCmd() *cobra.Command {
 func main() {
 	rootCmd := newRootCmd()
 	rootCmd.AddCommand(newGetCmd())
+	rootCmd.AddCommand(newRdfTestCmd())
 	rootCmd.Execute()
 }
