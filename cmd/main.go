@@ -14,6 +14,7 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"time"
 )
 
 var (
@@ -82,10 +83,11 @@ func newGetCmd() *cobra.Command {
 					//ClientSecret: clientSecret,
 					Endpoint: provider.Endpoint(),
 					// N.B. keep this in sync with the client id document
-					RedirectURL: "http://localhost:9080/auth/callback",
+					RedirectURL: fmt.Sprintf("http://localhost:%v/auth/callback", port),
 					Scopes:      []string{oidc.ScopeOpenID, oidc.ScopeOfflineAccess},
 				}
 
+				// TODO(jeremy): I think we can delete this code.
 				if clientFile != "" {
 					log.Info("Loading client id and secret", "file", clientFile)
 
@@ -110,22 +112,43 @@ func newGetCmd() *cobra.Command {
 					return errors.Wrapf(err, "Failed to start server")
 				}
 
-				s.StartAndBlock()
-				r, err := http.Get("https://pod.inrupt.com/jeremylewi/contacts/")
+				// Run the server in a background thread.
+				go func() {
+					s.StartAndBlock()
+				}()
 
+				// TODO(jeremy): How can we automatically open this up in the web browser
+				fmt.Printf("Login in at: %v", fmt.Sprintf("http://localhost:%v", port))
+
+				var tokSrc oauth2.TokenSource
+				for {
+					tokSrc = s.TokenSource()
+					if tokSrc == nil {
+						log.Info("Waiting for authorization to complete")
+						time.Sleep(5 * time.Second)
+					} else {
+						log.Info("Authorization completed")
+						break
+					}
+				}
+
+				c := oauth2.NewClient(context.Background(), tokSrc)
+
+				r, err := c.Get("https://pod.inrupt.com/jeremylewi/private/sample.txt")
 				if err != nil {
 					return err
 				}
+				body, readErr := ioutil.ReadAll(r.Body)
 
+				if readErr != nil {
+					log.Error(err, "Failed to read response body")
+				}
 				if r.StatusCode != http.StatusOK {
-					body, readErr := ioutil.ReadAll(r.Body)
-
-					if readErr != nil {
-						log.Error(err, "Failed to read response body")
-					}
-					log.Info("List request failed", "status", r.StatusCode, "body", string(body))
+					log.Info("Get request failed", "status", r.StatusCode, "body", string(body))
 					return nil
 				}
+
+				log.Info("Response succeeded", "body", string(body))
 				return nil
 			}()
 

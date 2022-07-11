@@ -16,6 +16,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -27,6 +28,8 @@ type Server struct {
 	listener net.Listener
 	config   oauth2.Config
 	verifier *oidc.IDTokenVerifier
+	mu       sync.Mutex
+	tokSrc   oauth2.TokenSource
 }
 
 func NewServer(config oauth2.Config, verifier *oidc.IDTokenVerifier, listener net.Listener, log logr.Logger) (*Server, error) {
@@ -122,7 +125,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 // The Auth callback is invoked in step 21 of the OIDC protocol.
 // https://solid.github.io/solid-oidc/primer/#:~:text=Solid%2DOIDC%20builds%20on%20top,authentication%20in%20the%20Solid%20ecosystem.
 // The OpenID server responds with a 303 redirect to the AuthCallback URL and passes the authorization code.
-// This is a mechanism for the authorization code to be passed into the code. 
+// This is a mechanism for the authorization code to be passed into the code.
 func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	ctx := context.Background()
 
@@ -141,6 +144,12 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to exchange token: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Create a tokensource. This will take care of automatically refreshing the token if necessary
+	// Make a copy of oauth2Token since we ill modify it below
+	copy := *oauth2Token
+	s.setTokenSource(s.config.TokenSource(ctx, &copy))
+
 	rawIDToken, ok := oauth2Token.Extra("id_token").(string)
 	if !ok {
 		http.Error(w, "No id_token field in oauth2 token.", http.StatusInternalServerError)
@@ -164,6 +173,7 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	oauth2Token.AccessToken = "*REDACTED*"
+	oauth2Token.RefreshToken = "*REDACTED*"
 
 	resp := struct {
 		OAuth2Token   *oauth2.Token
@@ -180,6 +190,18 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Write(data)
+}
+
+func (s *Server) setTokenSource(tokSrc oauth2.TokenSource) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tokSrc = tokSrc
+}
+
+func (s *Server) TokenSource() oauth2.TokenSource {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tokSrc
 }
 
 func randString(nByte int) (string, error) {
