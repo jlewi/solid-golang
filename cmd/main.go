@@ -70,8 +70,8 @@ func newGetCmd() *cobra.Command {
 					return errors.Wrapf(err, "Failed to create new provider")
 				}
 
-				// We host the Client ID document using github.
-				clientID := "https://raw.githubusercontent.com/jlewi/solid-golang/main/id/clientid20220708-1510#this"
+				// We host the Client ID document in a solid pod.
+				clientID := "https://pod.inrupt.com/jeremylewi/public/clientids/clientid01.json"
 				oidcConfig := &oidc.Config{
 					ClientID: clientID,
 				}

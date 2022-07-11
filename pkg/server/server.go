@@ -82,6 +82,7 @@ func (s *Server) StartAndBlock() error {
 
 	router.HandleFunc("/", s.handleRoot)
 	router.HandleFunc("/healthz", s.HealthCheck)
+	router.HandleFunc("/auth/callback", s.handleAuthCallback)
 
 	router.NotFoundHandler = http.HandlerFunc(s.NotFoundHandler)
 
@@ -116,7 +117,12 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAuthCallback handles the OIDC auth callback code copied from
-// https://github.com/coreos/go-oidc/blob/2cafe189143f4a454e8b4087ef892be64b1c77df/example/idtoken/app.go#L82
+// https://github.com/coreos/go-oidc/blob/2cafe189143f4a454e8b4087ef892be64b1c77df/example/idtoken/app.go#L82.
+//
+// The Auth callback is invoked in step 21 of the OIDC protocol.
+// https://solid.github.io/solid-oidc/primer/#:~:text=Solid%2DOIDC%20builds%20on%20top,authentication%20in%20the%20Solid%20ecosystem.
+// The OpenID server responds with a 303 redirect to the AuthCallback URL and passes the authorization code.
+// This is a mechanism for the authorization code to be passed into the code. 
 func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	ctx := context.Background()
 
