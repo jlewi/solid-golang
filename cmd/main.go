@@ -3,16 +3,20 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-logr/logr"
 	"github.com/jlewi/p22h/backend/pkg/logging"
-	"github.com/jlewi/solid-golang/pkg/server"
+	"github.com/jlewi/solid-golang/pkg/oauthext"
+
+	// We don't actually depend on GCP its just that this package contains some useful
+	// OAuth helper code.
+	"github.com/kubeflow/internal-acls/google_groups/pkg/gcp"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"golang.org/x/oauth2"
 	"io/ioutil"
-	"net"
 	"net/http"
+	"os/user"
+	"path"
 	"time"
 )
 
@@ -39,6 +43,18 @@ func newRootCmd() *cobra.Command {
 	return rootCmd
 }
 
+func getDefaultCredentialsFile() string {
+	u, err := user.Current()
+	if err != nil {
+		fmt.Printf("Failed to get homeDirectory; error %v", err)
+		return ""
+	}
+	homeDirectory := u.HomeDir
+	dir := path.Join(homeDirectory, ".solidgolang")
+
+	return path.Join(homeDirectory, dir, "credentials")
+}
+
 func newGetCmd() *cobra.Command {
 	var port int
 	cmd := &cobra.Command{
@@ -47,10 +63,8 @@ func newGetCmd() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 
 			err := func() error {
-				listener, err := net.Listen("tcp", fmt.Sprintf(":%v", port))
-				if err != nil {
-					return errors.Wrapf(err, "Failed to listen on port %v", port)
-				}
+				// We host the Client ID document in a solid pod.
+				clientID := "https://pod.inrupt.com/jeremylewi/public/clientids/clientid01.json"
 
 				webId := "https://pod.inrupt.com/jeremylewi/profile/card#me"
 				log.Info("fetching credentials", "webId", webId)
@@ -59,36 +73,20 @@ func newGetCmd() *cobra.Command {
 				oidcProviderUri := "https://broker.pod.inrupt.com/"
 				ctx := context.Background()
 
-				provider, err := oidc.NewProvider(ctx, oidcProviderUri)
+				solidCreds, err := oauthext.NewSolidOIDCHelper(clientID, oidcProviderUri, log)
 				if err != nil {
-					return errors.Wrapf(err, "Failed to create new provider")
+					return errors.Wrapf(err, "Failed to create new Solid OIDC helper.")
+				}
+				creds := gcp.CachedCredentialHelper{
+					CredentialHelper: nil,
+					TokenCache: &gcp.FileTokenCache{
+						CacheFile: getDefaultCredentialsFile(),
+						Log:       log,
+					},
+					Log: log,
 				}
 
-				// We host the Client ID document in a solid pod.
-				clientID := "https://pod.inrupt.com/jeremylewi/public/clientids/clientid01.json"
-				oidcConfig := &oidc.Config{
-					ClientID: clientID,
-				}
-				verifier := provider.Verifier(oidcConfig)
-
-				config := oauth2.Config{
-					ClientID: clientID,
-					//ClientSecret: clientSecret,
-					Endpoint: provider.Endpoint(),
-					// N.B. keep this in sync with the client id document
-					RedirectURL: fmt.Sprintf("http://localhost:%v/auth/callback", port),
-					Scopes:      []string{oidc.ScopeOpenID, oidc.ScopeOfflineAccess},
-				}
-
-				s, err := server.NewServer(config, verifier, listener, log)
-				if err != nil {
-					return errors.Wrapf(err, "Failed to start server")
-				}
-
-				// Run the server in a background thread.
-				go func() {
-					s.StartAndBlock()
-				}()
+				creds.GetTokenSource(context.Background())
 
 				// TODO(jeremy): How can we automatically open this up in the web browser
 				fmt.Printf("Login in at: %v", fmt.Sprintf("http://localhost:%v", port))
@@ -133,6 +131,7 @@ func newGetCmd() *cobra.Command {
 	}
 	cmd.Flags().IntVarP(&port, "port", "p", 9080, "Port to serve on")
 
+	cmd.Flags().StringVarP(&port, "port", "p", 9080, "Port to serve on")
 	return cmd
 }
 

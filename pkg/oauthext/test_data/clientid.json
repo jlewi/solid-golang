@@ -1,0 +1,15 @@
+{
+  "@context": ["https://www.w3.org/ns/solid/oidc-context.jsonld"],
+  "client_id": "https://pod.inrupt.com/somepod/public/clientids/clientid01.json",
+  "client_name": "Golang solid client id",
+  "redirect_uris": ["https://some-domain-to-be-set/callback", "http://localhost:9080/auth/callback"],
+  "post_logout_redirect_uris": ["https://localhost:9080/auth/callback"],
+  "client_uri": "https://localhost:9080/",
+  "logo_uri" : "https://app.example/logo.png",
+  "tos_uri" : "https://app.example/tos.html",
+  "scope" : "openid offline_access webid",
+  "grant_types" : ["refresh_token","authorization_code"],
+  "response_types" : ["code"],
+  "default_max_age" : 3600,
+  "require_auth_time" : true
+}
