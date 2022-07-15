@@ -6,10 +6,20 @@ import (
 	"fmt"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-logr/logr"
+	"github.com/go-logr/zapr"
 	"github.com/pkg/errors"
+	"go.uber.org/zap"
 	"golang.org/x/oauth2"
 	"net"
 	"net/http"
+	"net/url"
+	"os/exec"
+	"runtime"
+	"time"
+)
+
+const (
+	timeout = 5 * time.Minute
 )
 
 // SolidOIDCHelper implements the CredentialHelper interface defined in
@@ -17,6 +27,7 @@ import (
 type SolidOIDCHelper struct {
 	config *oauth2.Config
 	Log    logr.Logger
+	s      *Server
 }
 
 // NewSolidOIDCHelper creates a new instance of the helper to obtain solid OIDC credentaisl.
@@ -27,13 +38,24 @@ type SolidOIDCHelper struct {
 func NewSolidOIDCHelper(clientID string, oidcProviderUri string, log logr.Logger) (*SolidOIDCHelper, error) {
 	// Fetch the client id document and use that to get the callback URI
 	doc, err := fetchClientIDDoc(clientID)
-
 	if err != nil {
 		return nil, errors.Wrapf(err, "Failed to fetch ClientID doc")
 	}
 
-	// TODO(jeremy): Verify that ClientURI is localhost or 127.0.0.1?
-	listener, err := net.Listen("tcp", doc.ClientURI)
+	if !checkClientIDDoc(clientID, doc) {
+		return nil, errors.Wrapf(err, "ClientID document is invalid; check logs for more information.")
+	}
+
+	u, err := url.Parse(doc.ClientURI)
+	if err != nil {
+		return nil, errors.Wrapf(err, "Failed to parse client URI; %v", doc.ClientURI)
+	}
+
+	listener, err := net.Listen("tcp", u.Host)
+
+	if err != nil {
+		return nil, errors.Wrapf(err, "Failed to create listener")
+	}
 
 	ctx := context.Background()
 	provider, err := oidc.NewProvider(ctx, oidcProviderUri)
@@ -46,6 +68,9 @@ func NewSolidOIDCHelper(clientID string, oidcProviderUri string, log logr.Logger
 	}
 	verifier := provider.Verifier(oidcConfig)
 
+	if len(doc.RedirectURIs) > 1 {
+		log.Info("Warning; ClientID document has more than 1 RedirectURIs; the first one will be used", "uri", doc.RedirectURIs[0])
+	}
 	config := oauth2.Config{
 		ClientID: clientID,
 		Endpoint: provider.Endpoint(),
@@ -67,29 +92,35 @@ func NewSolidOIDCHelper(clientID string, oidcProviderUri string, log logr.Logger
 	h := &SolidOIDCHelper{
 		config: &config,
 		Log:    log,
+		s:      s,
 	}
 	return h, nil
 }
 
 // GetTokenSource requests a token from the web, then returns the retrieved token.
 func (h *SolidOIDCHelper) GetTokenSource(ctx context.Context) (oauth2.TokenSource, error) {
-	authURL := h.config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
-
-	// TODO(jlewi): How to open it automatically?
-	fmt.Printf("Go to the following link in your browser then type the "+
-		"authorization code: \n%v\n", authURL)
-
-	var authCode string
-	if _, err := fmt.Scan(&authCode); err != nil {
-		return nil, errors.Wrapf(err, "Unable to read authorization code")
+	h.Log.Info("Starting the OIDC web flow", "url", h.s.AuthStartURL())
+	if err := openBrowser(h.s.AuthStartURL()); err != nil {
+		h.Log.Error(err, "Failed to open URL automatically; try opening it manually in your browser", "url", h.s.AuthStartURL())
 	}
 
-	tok, err := h.config.Exchange(context.TODO(), authCode)
-	if err != nil {
-		return nil, errors.Wrapf(err, "Unable to retrieve token from web")
-	}
+	var tokSrc oauth2.TokenSource
+	timeOut := time.Now().Add(timeout)
+	wait := 5 * time.Second
+	for {
+		tokSrc = h.s.TokenSource()
+		if tokSrc != nil {
+			h.Log.Info("Authorization completed")
+			return tokSrc, nil
+		}
 
-	return h.config.TokenSource(ctx, tok), nil
+		if time.Now().Add(wait).After(timeOut) {
+			return nil, errors.New("Timeout waiting for the Solid OIDC webflow to complete")
+		} else {
+			h.Log.Info("Waiting for authorization to complete")
+			time.Sleep(5 * time.Second)
+		}
+	}
 }
 
 func (h *SolidOIDCHelper) GetOAuthConfig() *oauth2.Config {
@@ -118,4 +149,34 @@ func fetchClientIDDoc(clientID string) (*ClientIDDoc, error) {
 	}
 
 	return doc, nil
+}
+
+// openBrowser opens the provided URL in the browser.
+func openBrowser(url string) error {
+	var err error
+
+	switch runtime.GOOS {
+	case "linux":
+		err = exec.Command("xdg-open", url).Start()
+	case "windows":
+		err = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	case "darwin":
+		err = exec.Command("open", url).Start()
+	default:
+		err = fmt.Errorf("unsupported platform")
+	}
+
+	return err
+}
+
+// checkClientIDDoc run some validation tests on the ClientID doc to help discover invalid client id documents.
+func checkClientIDDoc(uri string, doc *ClientIDDoc) bool {
+	log := zapr.NewLogger(zap.L())
+	isValid := true
+	if uri != doc.ClientID {
+		isValid = false
+		log.Info("ClientID document is invalid; document is served at URL that doesn't match the client_uri field in the document", "uri", uri, "client_uri", doc.ClientID)
+	}
+
+	return isValid
 }

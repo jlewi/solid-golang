@@ -20,6 +20,10 @@ import (
 	"time"
 )
 
+const (
+	authStartPrefix = "/auth/start"
+)
+
 // Server creates a server to be used as part of client registration in the solid-oidc protocol.
 // As discussed in https://solid.github.io/solid-oidc/#clientids the client
 // identifies itself to the OIDC provider by presenting a URL
@@ -46,6 +50,11 @@ func NewServer(config oauth2.Config, verifier *oidc.IDTokenVerifier, listener ne
 
 func (s *Server) Address() string {
 	return fmt.Sprintf("http://localhost:%v", s.listener.Addr().(*net.TCPAddr).Port)
+}
+
+// AuthStartURL returns the URL to kickoff the oauth login flow.
+func (s *Server) AuthStartURL() string {
+	return s.Address() + authStartPrefix
 }
 
 func (s *Server) writeStatus(w http.ResponseWriter, message string, code int) {
@@ -83,7 +92,7 @@ func (s *Server) StartAndBlock() error {
 
 	router := mux.NewRouter().StrictSlash(true)
 
-	router.HandleFunc("/", s.handleRoot)
+	router.HandleFunc(authStartPrefix, s.handleStartWebFlow)
 	router.HandleFunc("/healthz", s.HealthCheck)
 	router.HandleFunc("/auth/callback", s.handleAuthCallback)
 
@@ -98,11 +107,11 @@ func (s *Server) StartAndBlock() error {
 	return err
 }
 
-// TODO(jeremy) What is the purpose of this function? It appears to set a cookie
-// and then redirect?
+// handleStartWebFlow kicks off the OIDC web flow.
 // It was copied from: https://github.com/coreos/go-oidc/blob/2cafe189143f4a454e8b4087ef892be64b1c77df/example/idtoken/app.go#L65
-// I think it might just be for the example its redirecting to the auth callback.
-func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
+// It sets some cookies before redirecting to the OIDC provider's URL for obtaining an authorization code.
+//
+func (s *Server) handleStartWebFlow(w http.ResponseWriter, r *http.Request) {
 	state, err := randString(16)
 	if err != nil {
 		http.Error(w, "Internal error", http.StatusInternalServerError)

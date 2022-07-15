@@ -17,11 +17,14 @@ import (
 	"net/http"
 	"os/user"
 	"path"
-	"time"
 )
 
 var (
 	log logr.Logger
+)
+
+const (
+	defaultClientID = "https://pod.inrupt.com/jeremylewi/public/clientids/clientid.json"
 )
 
 func newRootCmd() *cobra.Command {
@@ -56,16 +59,13 @@ func getDefaultCredentialsFile() string {
 }
 
 func newGetCmd() *cobra.Command {
-	var port int
+	var clientID string
 	cmd := &cobra.Command{
 		Short: "get contents of a pod",
 		Use:   "get",
 		Run: func(cmd *cobra.Command, args []string) {
 
 			err := func() error {
-				// We host the Client ID document in a solid pod.
-				clientID := "https://pod.inrupt.com/jeremylewi/public/clientids/clientid01.json"
-
 				webId := "https://pod.inrupt.com/jeremylewi/profile/card#me"
 				log.Info("fetching credentials", "webId", webId)
 				// TODO need to discover the oidc provider by reading the WebId profile.
@@ -78,7 +78,7 @@ func newGetCmd() *cobra.Command {
 					return errors.Wrapf(err, "Failed to create new Solid OIDC helper.")
 				}
 				creds := gcp.CachedCredentialHelper{
-					CredentialHelper: nil,
+					CredentialHelper: solidCreds,
 					TokenCache: &gcp.FileTokenCache{
 						CacheFile: getDefaultCredentialsFile(),
 						Log:       log,
@@ -86,21 +86,10 @@ func newGetCmd() *cobra.Command {
 					Log: log,
 				}
 
-				creds.GetTokenSource(context.Background())
+				tokSrc, err := creds.GetTokenSource(ctx)
 
-				// TODO(jeremy): How can we automatically open this up in the web browser
-				fmt.Printf("Login in at: %v", fmt.Sprintf("http://localhost:%v", port))
-
-				var tokSrc oauth2.TokenSource
-				for {
-					tokSrc = s.TokenSource()
-					if tokSrc == nil {
-						log.Info("Waiting for authorization to complete")
-						time.Sleep(5 * time.Second)
-					} else {
-						log.Info("Authorization completed")
-						break
-					}
+				if err != nil {
+					return errors.Wrapf(err, "Failed to get OIDC credential")
 				}
 
 				c := oauth2.NewClient(context.Background(), tokSrc)
@@ -129,9 +118,7 @@ func newGetCmd() *cobra.Command {
 
 		},
 	}
-	cmd.Flags().IntVarP(&port, "port", "p", 9080, "Port to serve on")
-
-	cmd.Flags().StringVarP(&port, "port", "p", 9080, "Port to serve on")
+	cmd.PersistentFlags().StringVarP(&clientID, "client-id", "", defaultClientID, "URI of the client id document.")
 	return cmd
 }
 
